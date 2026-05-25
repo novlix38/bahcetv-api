@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
-import requests
-import re
+import yt_dlp
 
 app = Flask(__name__)
 
@@ -41,7 +40,6 @@ HTML_INTERFACE = """
         
         #virtual-remote { position: absolute; bottom: 40px; left: 40px; display: grid; grid-template-columns: 60px 60px 60px; grid-template-rows: 60px 60px 60px; gap: 10px; z-index: 20; opacity: 0; transition: opacity 0.5s ease-in-out; }
         
-        /* Kumandaya özel z-index ile tıklanabilirliği sağladık */
         #virtual-remote.show-remote { opacity: 0.9 !important; pointer-events: auto !important; }
         
         .remote-btn { background: rgba(0, 0, 0, 0.6); border: 2px solid #00ffcc; color: #00ffcc; border-radius: 50%; font-size: 24px; display: flex; justify-content: center; align-items: center; cursor: pointer; box-shadow: 0 0 10px rgba(0, 255, 204, 0.2); transition: background 0.2s; }
@@ -58,7 +56,6 @@ HTML_INTERFACE = """
 
         #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #00ffcc; font-size: 28px; font-weight: bold; z-index: 5; display: none; }
         
-        /* Overlay artık tıklamaları engellemiyor (pointer-events: none), dokunuşlar doğrudan ekrana geçiyor */
         #interaction-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); color: #00ffcc; display: flex; justify-content: center; align-items: center; font-size: 30px; font-weight: bold; z-index: 50; pointer-events: none; transition: opacity 0.5s ease-in-out; text-align: center; padding: 20px;}
     </style>
 </head>
@@ -108,19 +105,17 @@ HTML_INTERFACE = """
         
         let hideInfoTimeout, hlsInstance = null;
 
-        // Evrensel Uyanma Fonksiyonu (Ekrana Tıklama veya Kumanda Tuşu)
         function wakeUp() {
             if (!hasInteracted) {
                 hasInteracted = true;
-                overlay.style.opacity = '0'; // Pürüzsüz kaybolma
+                overlay.style.opacity = '0';
                 setTimeout(() => { overlay.style.display = 'none'; }, 500);
                 loadChannel(currentChannelIndex);
-                return true; // Yeni uyandığını belirtir
+                return true; 
             }
             return false;
         }
 
-        // Kumandayı gösteren ve 5 saniye sonra gizleyen fonksiyon
         function showRemoteTemporarily() {
             if (!hasInteracted) return;
             remote.classList.add('show-remote');
@@ -130,15 +125,12 @@ HTML_INTERFACE = """
             }, 5000); 
         }
 
-        // Tüm Ekrana Tıklama Dinleyicisi
         document.addEventListener('click', (e) => {
-            // Eğer tam ekran butonuna basıldıysa uyandırma işlemini bölme
             if(e.target.id === 'fs-btn') return;
-            
             if (!hasInteracted) {
                 wakeUp();
             } else {
-                showRemoteTemporarily(); // Zaten açıksa sadece kumandayı göster
+                showRemoteTemporarily(); 
             }
         });
 
@@ -218,7 +210,7 @@ HTML_INTERFACE = """
         }
 
         function toggleFullscreen() {
-            wakeUp(); // Tam ekrana basılırsa da sistemi uyandır
+            wakeUp(); 
             if (!document.fullscreenElement) {
                 wrapper.requestFullscreen().catch(err => {});
                 document.getElementById('fs-btn').innerText = "[ ] KÜÇÜLT";
@@ -228,9 +220,7 @@ HTML_INTERFACE = """
             }
         }
 
-        // Kumanda / Klavye Dinleyicisi
         document.addEventListener('keydown', (event) => {
-            // Eğer sistem uykudaysa önce uyandır, uyanırsa işlemi kesme devam et
             wakeUp();
             showRemoteTemporarily();
             
@@ -266,28 +256,19 @@ def resolver():
         return jsonify({"type": "direct", "url": config["url"]})
         
     elif config["type"] == "youtube":
-        # Yeni Regex (Kazıma) Motoru: Doğrudan Chrome gibi davranıyoruz
         youtube_url = f"https://www.youtube.com/@{config['id']}/live"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
-        }
+        ydl_opts = {'quiet': True, 'skip_download': True}
         
         try:
-            resp = requests.get(youtube_url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                # 1. Strateji: Kesin Ana Video Kimliği (Yan menüdeki rastgele videoları tamamen es geçer)
-                match = re.search(r'"videoDetails":\{"videoId":"([^"]+)"', resp.text)
-                if match:
-                    return jsonify({"type": "youtube", "video_id": match.group(1)})
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(youtube_url, download=False)
+                video_id = info.get('id')
                 
-                # 2. Strateji: Canonical URL (Yedek Hedef)
-                match_alt = re.search(r'rel="canonical" href="https://www.youtube.com/watch\?v=([^"]+)"', resp.text)
-                if match_alt:
-                    return jsonify({"type": "youtube", "video_id": match_alt.group(1)})
-            
-            return jsonify({"error": "Canli yayin ID'si HTML icinde bulunamadi. Kanal cevrilmdisi olabilir."}), 404
-            
+            if video_id:
+                return jsonify({"type": "youtube", "video_id": video_id})
+            else:
+                return jsonify({"error": "Canli yayin ID'si bulunamadi"}), 404
+                
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
